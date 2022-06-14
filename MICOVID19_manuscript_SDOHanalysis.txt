@@ -1,0 +1,913 @@
+
+
+libname covid "H:\MARCQI\MICOVID19\Tables\2020_12_14";
+libname output "H:\MARCQI\MICOVID19\Output\SDOH\Manuscript";
+%let datadate=14DEC2020;
+
+
+/*-----------------------------------------------------------------
+Form mapping:
+
+131486 	COVID - Chest X-Ray (can be multiple entry)
+213971 	COVID - Adjunctive Therapies (required) (steroids, ACE, ARB, etc.)
+215536 	COVID - Daily Treatments 2 (required) (Legacy) (medications)
+228695 	COVID - Chest CT (can be multiple entry)
+236546 	COVID - Gram Stain of Respiratory Secretions (can be multiple entry)
+294639 	COVID - Labs (Non-Culture) (can be multiple entry)
+367463 	COVID - Culture (can be multiple entry)
+471893 	COVID - 60 Day Follow-Up
+496257 	COVID - Baseline Form (required)
+525684  COVID - Daily Treatment 3 (required) (Legacy) (consultations)
+547147 	COVID - Hospital Encounter and Discharge Form (required)
+547249 	COVID - Daily Treatments 1 (required)  (Legacy) (vascular support)
+998844 	COVID - Daily Measurements (required)  (Legacy)
+471893 	COVID - 60 Day Follow-Up
+
+***************************************
+new with 5/17/2020 upgrade
+***************************************
+
+783965  COVID - Intravascular Devices (Can be multiple entry)
+853378  COVID - Single Day (Required) (Can be multiple entry)
+	- pre-upgrade NIDs will have ABX information entered daily into this form
+122184  COVID - Single Day (after 21) (Required if LOS is >=22) (Can be multiple entry)
+	- pre-upgrade NIDs will have all information entered daily into this form if their los was >21 days
+
+-------------------------------------------------------------------*/
+
+/*-----------------------------------------------------------------
+Set up base patient data form
+-------------------------------------------------------------------*/
+proc sort data = covid.proc_pt OUT=patient NODUPKEYS; by nid;
+run;
+
+data patient;
+	set patient;
+	 %include 'H:\MARCQI\MICOVID19\Code\(Embedded) Proc_pt Vars Editing.sas';
+run;
+
+
+/*-----------------------------------------------------------------
+Check number of completions we have
+-------------------------------------------------------------------*/
+proc freq data = patient;
+	tables status*(covid_status);
+run;
+
+proc freq data = patient;
+	where covid_result = 'Positive';
+	tables status*(covid_status);
+run;
+
+
+/*-----------------------------------------------------------------
+Check sample size numbers
+-------------------------------------------------------------------*/
+proc freq data=patient;
+	where status in ('Completed','HC') and exclude = "eligible" and covid_status = "Eligible - full abstraction";
+	tables status*(covid_result);
+run;
+
+
+/*-----------------------------------------------------------------
+Check basic demographics
+-------------------------------------------------------------------*/
+proc freq data = patient;
+	where status in ('Completed','HC') and exclude = "eligible";
+	tables covid_result*(eth hosp payer gender race los);
+run;
+
+proc means data = patient maxdec=1;
+	where status in ('Completed','HC') and exclude = "eligible";
+	class covid_result;
+	var age los;
+run;
+
+
+/*-----------------------------------------------------------------
+Who is missing the required forms?
+-------------------------------------------------------------------*/
+data patient;
+	set patient;
+	if covid_result in('Positive','Prp') then covid_pos = 1; else covid_pos = 0; 
+	array varlist have_:;
+		do over varlist;
+			if varlist = . then varlist = 0;
+		end; 
+run;
+
+proc freq data = patient;
+	where status in ('Completed','HC') and exclude = "eligible" and covid_status = "Eligible - full abstraction" and (have_547249 = 1 or have_998844 = 1 or have_525684 = 1 or have_215536 = 1);
+	tables have:;
+run;
+
+
+/*-----------------------------------------------------------------
+Create base dataset with only complete hospitalizations
+-------------------------------------------------------------------*/
+data covid_data;
+	set patient;
+	where exclude = "eligible" and status in ('Completed','HC');
+run;
+
+proc freq data = covid_data;
+	tables covid_result*(eth hosp payer gender race);
+run;
+
+
+/*-----------------------------------------------------------------
+	Edit the baseline form
+-------------------------------------------------------------------*/
+proc sort data = covid.proc_renames_496257 OUT=baseline NODUPKEYS; by nid;
+run;
+
+data baseline;
+	set baseline;
+	%include 'H:\MARCQI\MICOVID19\Code\(Embedded) Baseline Vars Editing.sas';
+run;
+
+proc contents data=baseline; run;
+
+
+/*-----------------------------------------------------------------
+	Edit the new daily forms - after 5/15/2020 abstractions
+-------------------------------------------------------------------*/
+%include 'H:\MARCQI\MICOVID19\Code\(Embedded) Single Day Vars Editing.sas';
+%include 'H:\MARCQI\MICOVID19\Code\(Embedded) Single Day After 21 Vars Editing.sas';
+
+proc freq data=singleday_21;
+	tables steroids_21 * OMMed_2_21 * sterimmmed_36_21 / missing;
+run;
+
+proc freq data=singleday_21;
+	tables antiviral_21;
+run;
+
+proc freq data=singleday_over21; 
+	tables antiviral_over21;
+run;
+
+
+/*-----------------------------------------------------------------
+	Edit the chest x-ray and chest-CT forms (unchanged)
+-------------------------------------------------------------------*/
+data chest_xray;
+	set covid.proc_renames_131486;
+	%include 'H:\MARCQI\MICOVID19\Code\(Embedded) Chest X-Ray Vars Editing.sas';
+run;
+
+data chest_ct;
+	set covid.proc_renames_228695;
+	%include 'H:\MARCQI\MICOVID19\Code\(Embedded) Chest CT Vars Editing.sas';
+run;
+
+
+/*-----------------------------------------------------------------
+	Hospital Encounter and Discharge form (unchanged)
+-------------------------------------------------------------------*/
+/* remove duplicates */
+proc sort data = covid.proc_renames_547147 OUT=encounter_discharge NODUPKEYS; by nid;
+run;
+
+data encounter_discharge;
+	set encounter_discharge;
+	%include 'H:\MARCQI\MICOVID19\Code\(Embedded) Encounter and Discharge Vars Editing.sas';
+run;
+
+
+/*-----------------------------------------------------------------
+	Edit the adjunctive therapies forms (including legacy variables housed in the new form)
+-------------------------------------------------------------------*/
+/* new form */
+proc sort data = covid.proc_renames_213971 OUT=adjunct_therapy NODUPKEYS; by nid;
+run;
+
+data adjunct_therapy;
+	set adjunct_therapy;
+	%include 'H:\MARCQI\MICOVID19\Code\(Embedded) Adjunctive Therapies Vars Editing.sas';
+run;
+
+
+/* legacy variables from new form - checked, correct form */
+proc sort data = covid.proc_renames_213971 OUT=adjunct_therapy_legacy NODUPKEYS; by nid;
+run;
+
+data adjunct_therapy_legacy;
+	set adjunct_therapy_legacy;
+	%include 'H:\MARCQI\MICOVID19\Code\(Embedded) Adjunctive Therapies Vars Editing - Legacy.sas';
+run;
+
+
+/*-----------------------------------------------------------------
+Daily treatments 1 LEGACY:
+	- Respiratory support information for days 1-21 of hospitalization
+	- Daily level of care for days 1-21 of hospitalization
+-------------------------------------------------------------------*/
+proc sort data = covid.proc_renames_547249 OUT=dailytreat_1 NODUPKEYS; by nid;
+run;
+
+data dailytreat_1;
+	set dailytreat_1;
+	%include 'H:\MARCQI\MICOVID19\Code\(Embedded) Daily Treatments 1 Vars Editing.sas';
+run;
+
+
+/*-----------------------------------------------------------------
+	Daily treatments 2: Vasopressors for days 1-21 of hospitalization
+-------------------------------------------------------------------*/
+proc sort data = covid.proc_renames_215536 OUT=dailytreat_2 NODUPKEYS; by nid;
+run;
+
+data dailytreat_2;
+	set dailytreat_2;
+	%include 'H:\MARCQI\MICOVID19\Code\(Embedded) Daily Treatments 2 Vars Editing.sas';
+run;
+
+
+/*-----------------------------------------------------------------
+	Daily treatments 3 form:
+	- Consultations for days 1-21 of hospitalization
+-------------------------------------------------------------------*/
+proc sort data = covid.proc_renames_525684 OUT=dailytreat_3 NODUPKEYS; by nid;
+run;
+
+data dailytreat_3;
+	set dailytreat_3;
+	%include 'H:\MARCQI\MICOVID19\Code\(Embedded) Daily Treatments 3 Vars Editing.sas';
+run;
+
+
+/*-----------------------------------------------------------------
+	Edit the daily measurements form (legacy) and single day form 
+	to create a data set with initial vital signs
+	creates dataset: initial vitals
+-------------------------------------------------------------------*/
+%include 'H:\MARCQI\MICOVID19\Code\(Embedded) Initial Vital Signs.sas';
+
+
+/*-----------------------------------------------------------------
+	Edit the gram stain form (unchanged)
+-------------------------------------------------------------------*/
+data gram_stain;
+	set covid.proc_renames_236546;
+run;
+
+
+/*-----------------------------------------------------------------
+	Edit the labs form (unchanged)
+-------------------------------------------------------------------*/
+data labs;
+	set covid.proc_renames_294639;
+	/* Use this form to identify how many tests per patient and whether they were negative or positive
+	CovidDateCollection_294639
+	CovidResult_294639
+	CovidSource_294639
+	CovidSource_other_294639
+
+	Also need to identify patients who have positive other results then covid+ results later - no observations yet
+	 */
+	%include 'H:\MARCQI\MICOVID19\Code\(Embedded) Labs Vars Editing.sas';
+run;
+
+
+/*-----------------------------------------------------------------
+	Edit the cultures form (unchanged)
+-------------------------------------------------------------------*/
+%include 'H:\MARCQI\MICOVID19\Code\(Embedded) Culture Vars Editing.sas';
+
+
+/*-----------------------------------------------------------------
+	Edit the 60-day follow-up form (unchanged)
+-------------------------------------------------------------------*/
+proc sort data = covid.proc_renames_471893 OUT=sixty_day_fup NODUPKEYS; by nid;
+run;
+
+data sixty_day_fup;
+     set sixty_day_fup;
+     %include 'H:\MARCQI\MICOVID19\Code\(Embedded) 60-day Vars Editing.sas';
+run;
+	
+
+/*-----------------------------------------------------------------
+	Merge all datasets together
+-------------------------------------------------------------------*/
+data covid_data; 
+merge covid_data(in=y) baseline singleday singleday_21 singleday_over21 singleday_after21 encounter_discharge adjunct_therapy adjunct_therapy_legacy dailytreat_1 sixty_day_fup
+				 dailytreat_2 initialvitals2 chest_xray chest_ct;
+	by nid;
+	if y;
+run;
+
+
+/*-----------------------------------------------------------------
+	Data Consolidation
+-------------------------------------------------------------------*/
+data covid_data;
+	set covid_data;
+	%include 'H:\MARCQI\MICOVID19\Code\(Embedded) Data consolidation.sas';
+run;
+
+proc sort data = covid_data OUT=covid_data_test NODUPKEYS; by nid;
+run;
+
+data covid_data;
+	set covid_data_test;
+	death_days = DeathDate_547147 - hosp_enc_date;
+	death_Age = (DeathDate_547147 - DOB)/365;
+	if discharge_status = 'Deceased' and deathdate_547147=. then death_days = DischargeDate_547147 - hosp_enc_date;
+		if discharge_status = 'Deceased' and death_days=. then death_days = Discharge_Date - hosp_enc_date;
+run;
+
+proc freq data = covid_data;
+	tables EndStatus_547147 covid_result;
+run;
+
+data covid_data; 
+	set covid_data;
+	if EndStatus_547147 = 'Death' then	death = 1;
+	else if discharge_status = 'Deceased' then death = 1;
+	else death = 0;
+	if ct_7daysb4admit = 1 then CTonadmit = 1; else CTonadmit = 0;
+	if xray_7daysb4admit = 1 then XRAYonadmit = 1; else XRAYonadmit = 0; 
+	if CTonadmit = 1 or XRAYonadmit = 1 then imagingonadmit = 1; else imagingonadmit = 0;
+	if Doc7_20_ct = 1 or Doc7_20_xray = 1 then normal_noabnormal = 1; else normal_noabnormal = 0;
+	/* Combine variables that are coming from single-day forms and legacy daily treatments and adjunctive therapies forms */
+	%include 'H:\MARCQI\MICOVID19\Code\(Embedded) Data consolidation.sas';
+	/* Includes patient-reported-positive in the COVID-positive group */
+	if covid_result in('Positive','Prp') then covid_pos = 1; else covid_pos = 0; 
+	%include 'H:\MARCQI\MICOVID19\Code\(Embedded) Labels.sas';
+	/* Create the charlson score */
+	%include 'H:\MARCQI\MICOVID19\Code\(Embedded) Charlson Score.sas';
+run;
+
+
+/*-----------------------------------------------------------------
+-----------------------------------------------------------------
+	End merging, begin auto-output excel sheet data
+----------------------------------------------------------------
+-------------------------------------------------------------------*/
+
+*---------------------------------------------------
+Count observations for output
+---------------------------------------------------*;
+proc sql noprint; select count(*) into :count_ALL trimmed
+    		from covid_data(where=(status in ('Completed','HC') and exclude = "eligible"));
+		quit;
+proc sql noprint; select count(*) into :count_FULL trimmed
+    		from covid_data(where=(status in ('Completed','HC') and exclude = "eligible" and covid_status = "Eligible - full abstraction"));
+		quit;
+proc sql noprint; select count(*) into :count_pos_ALL trimmed
+    		from covid_data(where=(covid_pos=1 and status in ('Completed','HC') and exclude = "eligible"));
+    	quit;
+proc sql noprint; select count(*) into :count_pos_FULL trimmed
+    		from covid_data(where=(covid_pos=1 and status in ('Completed','HC') and exclude = "eligible" and covid_status = "Eligible - full abstraction"));
+    	quit;
+proc sql noprint; select count(*) into :count_hhf trimmed
+    		from covid_data(where=(covid_pos=1 and status in ('Completed','HC') and exclude = "eligible" and covid_status = "Eligible - full abstraction" and excludeHHF = 0));
+    	quit;
+
+
+*---------------------------------------------------
+	Output covid status numbers 
+---------------------------------------------------*;
+data patient;
+	length case_status $32;
+	set patient;
+	where exclude = "eligible";
+	if status = 'Active' then do; case_status = 'Active'; end;
+	if status in('HC','Completed') then do; case_status = 'Hospitalization Complete'; end;
+run;
+
+proc freq data = patient;
+	tables case_status*(covid_status)/out=freqcnt;
+run;
+
+/* Status of abstraction by covid pos/neg AND full/demographics only */
+proc freq data = patient;
+	tables case_status*(covid_result)/out=freqcnt1a;
+run;
+
+proc freq data = patient;
+	where covid_status = "Eligible - full abstraction";
+	tables case_status*(covid_result)/out=freqcnt1b;
+run;
+
+
+*---------------------------------------------------
+	Basic demographics
+---------------------------------------------------*;
+* Include macro for the demographic table;
+%include 'H:\MARCQI\MICOVID19\Code\(Embedded) Demographic table Multiple.sas';
+
+
+*---------------------------------------------------------------------------
+	Create Data Set of Covid Positive Patients Only for SDOH Study
+----------------------------------------------------------------------------*;
+data covid_positive;
+	set covid_data;
+	where status in('Completed','HC') and exclude = "eligible" and covid_status = "Eligible - full abstraction" and covid_pos = 1;
+	if race="black" then racecat= 0;
+	if race="asian" then racecat= 1;
+	if race="white" then racecat= 2;
+	if eth="hispanic" then racecat= 3;
+		if race="Arab" then racecat= 4;
+		if race="islander" then racecat= 4;
+		if race="native" then racecat= 4;
+		if race="other" then racecat= 4;
+		if race="unknown" then racecat= 4;
+		if race=" " then racecat= 4;
+run;
+
+proc format library=work;
+	value 	racecat 0='African American/Black' 1='Asian' 2='Caucasian/White' 3='Latino' 4='Other/Unknown';
+run;
+
+proc freq data=covid_positive;
+	tables racecat racecat*covid_result racecat*eth/missing;
+	format racecat racecat.;
+run;
+
+/* Breakdown of Other/Unknown Race Category */
+proc freq data=covid_positive;
+	where racecat=4;
+	tables race race*eth/missing;
+run;
+
+
+/*-----------------------------------------------------------------
+	Hospital Bed Size (full/demographics only)
+---------------------------------------------------*---------------*/
+proc import out=work.bedsize datafile= "H:\MARCQI\MICOVID19\Code\Social Determinants of Health\Hospital_Bed_Size.xlsx"
+	dbms=xlsx replace;
+run;
+
+proc univariate data=work.bedsize;
+	var bed_size1;
+run;
+
+proc sort data=work.bedsize;
+	by hosp;
+run;
+
+proc sort data=covid_positive;
+	by hosp;
+run;
+
+data covid_positive;
+	merge work.bedsize covid_positive;
+	by hosp;
+	if bed_size1 <= 189 then hosp_size1=1;
+		else hosp_size1=0;
+	if bed_size1 > 189 and bedsize_1 <= 304 then hosp_size2=1;
+		else hosp_size2=0;
+	if bed_size1 > 304 and bedsize_1 <= 404 then hosp_size3=1;
+		else hosp_size3=0;
+	if bed_size1 > 404 then hosp_size4=1;
+		else hosp_size4=0;
+			if bed_size1 < 250 then hosp_small=1;
+				else hosp_small=0;
+			if bed_size1 >=250 then hosp_large=1;
+				else hosp_large=0;
+					if source_transfer = 1 and bed_size1 >= 250 then source_transfer_large=1;
+						else source_transfer_large=0;
+						if death = 1 and hosp_small = 1 then death_small=1;
+						else death_small=0;
+						if death = 1 and hosp_large = 1 then death_large=1;
+						else death_large=0;
+							if dementia = 1 and priorresidence_496257='Assisted Living' then dem_asstliv=1;
+								else dem_asstliv=0;
+							if dementia = 1 and priorresidence_496257='Community Living' then dem_cmmtliv=1;
+								else dem_cmmtliv=0;
+							if dementia = 1 and priorresidence_496257='Group Home' then dem_grphom=1;
+								else dem_grphom=0;
+							if dementia = 1 and priorresidence_496257='Home' then dem_home=1;
+								else dem_home=0;
+							if dementia = 1 and priorresidence_496257='Inpatient Psychiatric Facility' then dem_psychfac=1;
+								else dem_psychfac=0;
+							if dementia = 1 and priorresidence_496257='Long Term Acute Care Hospital (LTAC)' then dem_ltac=1;
+								else dem_ltac=0;
+							if dementia = 1 and priorresidence_496257='Skilled Nursing Facility' then dem_snf=1;
+								else dem_snf=0;
+							if dementia = 1 and priorresidence_496257='Sub-acute Rehabilitation Facility' then dem_rehab=1;
+								else dem_rehab=0;
+	if returntowork_yes=1 then timetoreturn = (whenreturn_471893 - discharge_date);
+	if covidtestresult1_471893='Y' then days_totest1 = (covidtestdate1_471893 - discharge_date);
+							if comfortcare = 1 and death=1 and priorresidence_496257='Assisted Living' then cc_asstliv=1;
+								else cc_asstliv=0;
+							if comfortcare = 1 and death=1 and priorresidence_496257='Community Living' then cc_cmmtliv=1;
+								else cc_cmmtliv=0;
+							if comfortcare = 1 and death=1 and priorresidence_496257='Group Home' then cc_grphom=1;
+								else cc_grphom=0;
+							if comfortcare = 1 and death=1 and priorresidence_496257='Home' then cc_home=1;
+								else cc_home=0;
+							if comfortcare = 1 and death=1 and priorresidence_496257='Inpatient Psychiatric Facility' then cc_psychfac=1;
+								else cc_psychfac=0;
+							if comfortcare = 1 and death=1 and priorresidence_496257='Long Term Acute Care Hospital (LTAC)' then cc_ltac=1;
+								else cc_ltac=0;
+							if comfortcare = 1 and death=1 and priorresidence_496257='Skilled Nursing Facility' then cc_snf=1;
+								else cc_snf=0;
+							if comfortcare = 1 and death=1 and priorresidence_496257='Sub-acute Rehabilitation Facility' then cc_rehab=1;
+								else cc_rehab=0;
+
+run;
+
+data covid_positive;
+	set covid_positive;
+	if diabetes_uncomp = 1 or diabetes_comp = 1 then diabetes_all = 1;
+		else diabetes_all = 0;
+run;
+
+
+*---------------------------------------------------------------------------
+	Addressing Inconsistencies in Lab Values that could not be confirmed
+----------------------------------------------------------------------------*;
+data covid_positive;
+	set covid_positive;
+	if timetoreturn<0 then timetoreturn=.;
+	if bmi_calc>2000 then bmi_calc=.;
+	if ldhhigh_day1 > 100000 then ldhhigh_day1=.;
+	if il6high_day1 > 1000 then il6high_day1 =.;
+	if platlow_day1 < 3 then platlow_day1 = .;
+	if platlow_day1 >20000    then Corr_PLATlOW_DAY1 = PlatLow_Day1/1000;
+		else corr_platlow_day1=platlow_day1;
+	if crpunit_853378='mg/L' then Corr_crphigh_day1 = crphigh_day1*0.1;
+		else Corr_crphigh_day1 = crphigh_day1;
+			if corr_crphigh_day1>750 then corr_crphigh_day1 = .;
+				if creatininehigh_day1 > 100 then creatininehigh_day1 = .;
+	format racecat racecat.;
+run;
+
+proc means data=covid_positive n mean std min max maxdec=2; 
+by racecat; 
+var platlow_day1 corr_platlow_day1; 
+run;
+
+proc sort data=covid_positive;
+	by racecat;
+run;
+
+
+/*-----------------------------------------------------------------
+	Change Study Population to Covid Positive Only Population
+------------------------------------------------------------------*/
+data covid_positive_labtest;
+	set covid_positive;
+	where covid_result = 'Positive';
+run;
+
+proc freq data=covid_positive_labtest;
+	tables (covid_result death) * racecat / missing;
+run;
+
+
+/*-------------------------------------------------------------------------------------------------------------
+	LAB POSITIVE PATIENTS ONLY -Descriptive table for any abstraction (full/demographics only)
+		gender, ethnicity, insurance type, hospital size, age, bmi, los
+--------------------------------------------------------------------------------------------------------------*/
+* By RACE if covid positive;
+%demotbm(    input_dir = 		H:\MARCQI\MICOVID19\Code\
+				, output_dir = 		H:\MARCQI\MICOVID19\Output\SDOH\Manuscript
+				, input_file = 		indepvar_list_withshortlabels_ALL_Race.csv
+				, output_file = 	SDOH_descriptivestats_&sysdate9..xlsx
+				, depvar = 			racecat
+				, srcdata = 		covid_positive_LABTEST
+				, varlevel_ge = 	0
+				, cohort = 			where status in ('Completed','HC') and exclude = "eligible" and covid_status = "Eligible - full abstraction" and covid_pos = 1
+				, sheet = 			All_abstractions
+				, label4 = 			Other/Unknown
+				, label3 = 			Latino
+				, label2 = 			Caucasian/White
+				, label1 = 			Asian
+				, label0 = 			African American/Black
+			  );
+
+	data ALL_byrace_lab;
+		set cat_con_p;
+		where var_level > 0;
+		label var_label = 'Variable';
+	run;
+
+	proc datasets library=work;
+   		delete cat: con: chi: ttest:;
+	run;
+
+	proc means data=covid_positive_LABTEST n mean std maxdec=1;
+	 class racecat;
+	 var age bmi los;
+	run;
+
+
+/*------------------------------------------------------------------------------------------------------
+	Steroid and Antiviral Use in LAB POSITIVE PATIENTS ONLY -based on hospital demographics
+	Dexamethasone and Remdesivir Use in LAB POSITIVE PATIENTS ONLY -based on hospital demographics
+-------------------------------------------------------------------------------------------------------*/
+* Use by Hospital Size;
+	proc freq data=covid_positive_labtest;
+		where hosp_small = 1;
+		tables racecat * (antiviral antivirmed_3 steroids steroidmed_15) / chisq;
+	run;
+
+	proc freq data=covid_positive_labtest;
+		where hosp_large = 1;
+		tables racecat * (antiviral antivirmed_3 steroids steroidmed_15) / chisq;
+	run;
+	
+
+	* If Transferred from Another Hospital, what size hospital were they transfer to?;
+	proc freq data=covid_positive;
+		where source_transfer=1;
+		tables hosp_large*racecat / missing;
+	run;
+
+
+* Use by Teaching Hospital Status;
+	proc freq data=covid_positive_labtest;
+		tables racecat * teaching_hospital_status;
+	run;
+
+	proc freq data=covid_positive_labtest;
+		where teaching_hospital_status = 'Yes';
+		tables racecat * (antiviral antivirmed_3 steroids steroidmed_15) / chisq;
+	run;
+
+	proc freq data=covid_positive_labtest;
+		where teaching_hospital_status = 'No';
+		tables racecat * (antiviral antivirmed_3 steroids steroidmed_15) / chisq;
+	run;
+
+	
+/*-----------------------------------------------------------------------
+LAB POSITIVE PATIENTS ONLY -Descriptive tables for full abstraction
+		full list of demographic variables
+-------------------------------------------------------------------------*/
+* By RACE if covid positive;
+%demotbm(    input_dir = 		H:\MARCQI\MICOVID19\Code\
+				, output_dir = 		H:\MARCQI\MICOVID19\Output\SDOH\Manuscript
+				, input_file = 		Race_indepvar_list_withshortlabels.csv
+				, output_file = 	SDOH_descriptivestats_&sysdate9..xlsx
+				, depvar = 			racecat
+				, srcdata = 		covid_positive_LABTEST
+				, varlevel_ge = 	0
+				, cohort = 			where status in ('Completed','HC') and exclude = "eligible" and covid_status = "Eligible - full abstraction" and covid_pos = 1
+				, sheet = 			All_abstractions
+				, label4 = 			Other/Unknown
+				, label3 = 			Latino
+				, label2 = 			Caucasian/White
+				, label1 = 			Asian
+				, label0 = 			African American/Black
+			  );
+
+	data FULL_byrace_lab (drop = var_order var_name);
+		set cat_con_p;
+		where var_level > 0;
+		label var_label = 'Variable';
+		label var_category = 'Category';
+		label var_subcategory = 'Sub-Category';
+	run;
+
+	proc datasets library=work;
+   		delete cat: con: chi: ttest:;
+	run;
+
+
+/*-----------------------------------------------------------------
+	Multivariate Analysis LAB POSITIVE PATIENTS 
+-------------------------------------------------------------------*/
+* Creative Variable Indicating # of Comorbidities;
+	data covid_positive_LABTEST;
+		set covid_positive_LABTEST;
+		comorb_num = sum(aids, diabetes_all, hypertension, paraplegia, ibd, leukemia, lymphoma, malignancy, metas_tumor, liver_mild, 
+							liver_severe, asthma, copd,	cpd, kidney_severe, transplant, pud, pvd, rheumatoid, cardio_combined, 
+							disease_cerebr, CHF, dementia, cancer);
+		covid_tx = sum(ommed_2, hydrox_azith, ommed_3, ommed_4, vitaminc, il6_inhibit, AntivMeds_3, sterimmMed_29);
+	run;
+
+	data covid_positive_LABTEST;
+		set covid_positive_LABTEST;
+		if comorb_num > 3 then comorbcat = 1;
+		else comorbcat = 0;
+		if age >= 65 then agecat = 1;
+		else agecat = 0;
+		if covid_tx >=1 then covidspectx = 1;
+		else  covidspectx = 0;
+		if racecat = 2 then race_cauc = 1;
+		else race_cauc = 0;
+	run;
+
+	proc logistic data=covid_positive_LABTEST descending;
+		class racecat (ref='Caucasian/White') / param = ref;
+		model death (event='1') = age racecat smoke_never comorbcat arb ace abx antiviral covidspectx statins 
+									steroids nsaid / lackfit selection=forward;
+		ods output ParameterEstimates = model;
+	run;
+	quit;
+
+
+/*-----------------------------------------------------------------
+ANTIVIRAL and STEROIDS race category and month of encounter 
+-------------------------------------------------------------------*/
+data covid_positive_labtest;
+	set covid_positive_labtest;
+		dayofencounter = day(hosp_enc_date);
+		monthofencounter = month(hosp_enc_date);
+run;
+
+
+/*-----------------------------------------------------------------
+ANTIVIRAL and STEROIDS by Medication Name
+-------------------------------------------------------------------*/
+proc freq data=covid_positive_labtest;
+where antiviral=1;
+	tables racecat * (antiviral) / missing ;
+run;
+
+data covid_positive_labtest;
+	set covid_positive_labtest;
+	if AntiVirMed_5 = 1 or AntiVirMed_6 = 1 or AntiVirMed_7 = 1 or AntiVirMed_8 = 1 then AntiVirMed_Other = 1; else AntiVirMed_Other = 0;
+run;
+
+proc freq data=covid_positive_labtest;
+	tables racecat * (AntiVirMed_: AntiVirMed_Other) / chisq fisher;
+run;
+
+*Remdesivir Frequencies;
+proc freq data=covid_positive_labtest;
+	where antivirmed_3=1;
+	tables monthofencounter * racecat / fisher ;
+run;
+
+*Antiviral Frequencies;
+proc freq data=covid_positive_labtest;
+	where antiviral=1;
+	tables racecat * (AntivMeds_1 AntivMeds_1_21 AntivMeds_1_over21 )/ missing;
+run;
+
+*Steroid Frequencies;
+proc freq data=covid_positive_labtest;
+	where steroids=1;
+	tables racecat * (AntivMeds_1_213971 AntivMeds_1 AntivMed_1_853378 AntivMeds_1_21 AntivMed_1_122184 AntivMeds_1_over21)/ missing;
+run;
+
+
+* STEROIDS by MEDICATION NAME;
+proc freq data=covid_positive_labtest;
+	tables racecat * (steroids) / missing ;
+run;
+
+proc freq data=covid_positive_labtest;
+	tables racecat * (SteroidMed_:) / chisq ;
+run;
+
+
+/*----------------------------------------------------------------------------
+	LAB POSITIVE PATIENTS ONLY -LABS: Descriptive tables for full abstraction
+------------------------------------------------------------------------------*/
+* By RACE if covid positive;
+%demotbm(    input_dir = 		H:\MARCQI\MICOVID19\Code\
+				, output_dir = 		H:\MARCQI\MICOVID19\Output\SDOH\
+				, input_file = 		RaceLabsList.csv
+				, output_file = 	SDOH_LABS_descriptivestats_&sysdate9..xlsx
+				, depvar = 			racecat
+				, srcdata = 		covid_positive_LABTEST
+				, varlevel_ge = 	0
+				, cohort = 			where status in ('Completed','HC') and exclude = "eligible" and covid_status = "Eligible - full abstraction" and covid_pos = 1
+				, sheet = 			All_abstractions
+				, label4 = 			Other/Unknown
+				, label3 = 			Latino
+				, label2 = 			Caucasian/White
+				, label1 = 			Asian
+				, label0 = 			African American/Black
+			  );
+
+	data labs_byrace_labtest (drop = var_order var_name);
+		set cat_con_p;
+		where var_level > 0;
+		label var_label = 'Variable';
+		label var_category = 'Category';
+		label var_subcategory = 'Sub-Category';
+	run;
+
+	proc datasets library=work;
+   		delete cat: con: chi: ttest:;
+	run;
+
+
+/*----------------------------------------------------------------------------
+	LAB POSITIVE PATIENTS ONLY:Comparison of lab values across race categories
+------------------------------------------------------------------------------*/
+	proc glm data=covid_positive_labtest;
+		class racecat;
+		model corr_platlow_day1 = racecat;
+	run;
+
+	proc glm data=covid_positive_labtest;
+		class racecat;
+		model corr_crphigh_day1 = racecat;
+	run;
+	
+	proc glm data=covid_positive_labtest;
+		class racecat;
+		model prochigh_day1 = racecat;
+	run;
+		
+	proc glm data=covid_positive_labtest;
+		class racecat;
+		model maxtrophigh_day1 = racecat;
+	run;
+			
+	proc glm data=covid_positive_labtest;
+		class racecat;
+		model maxbnphigh_day1 = racecat;
+	run;
+	
+	**INITIAL VITALS, LAB POSITIVE PATIENTS ONLY;
+	proc sort data=covid_positive_labtest;
+	by racecat;
+	run;
+
+/* Address lab values normality */
+proc means data=covid_positive_labtest n std mean  p50 qrange maxdec=1;
+	by racecat;
+	var wbchigh_day1 lymphlow_day1 corr_platlow_day1 hgbhigh_day1 creatininehigh_day1 althigh_day1 bilihigh_day1 
+			trophigh_day1 maxtrophigh_day1 maxbnphigh_day1 cpkhigh_day1
+			ldhhigh_day1 phlow_day1 lactatehigh_day1 esrhigh_day1 ferrhigh_day1 crphigh_day1 corr_crphigh_day1 prochigh_day1 fibrhigh_day1 il6high_day1;
+run;
+
+	proc univariate data=covid_positive_labtest normal plot;
+	 by racecat;
+	 var maxbnphigh_day1  ;
+	run;
+	
+		proc npar1way data=covid_positive_labtest;
+		class racecat;
+		var maxbnphigh_day1 ;
+		run;
+
+	proc univariate data=covid_positive_labtest normal plot;
+	 by racecat;
+	 var cpkhigh_day1 ;
+	run;
+		
+		proc npar1way data=covid_positive_labtest;
+		class racecat;
+		var cpkhigh_day1;
+		run;
+
+	proc univariate data=covid_positive_labtest normal plot;
+	 by racecat;
+	 var phlow_day1  ;
+	run;
+	
+		proc npar1way data=covid_positive_labtest;
+		class racecat;
+		var phlow_day1  ;
+		run;
+
+	proc univariate data=covid_positive_labtest normal plot;
+	 by racecat;
+	 var esrhigh_day1;
+	run;
+	
+		proc npar1way data=covid_positive_labtest;
+		class racecat;
+		var esrhigh_day1 ;
+		run;
+
+	proc univariate data=covid_positive_labtest normal plot;
+	 by racecat;
+	 var ferrhigh_day1 ;
+	run;
+	
+		proc npar1way data=covid_positive_labtest;
+		class racecat;
+		var ferrhigh_day1 ;
+		run;
+
+	proc univariate data=covid_positive_labtest normal plot;
+	 by racecat;
+	 var fibrhigh_day1 ;
+	run;
+	
+		proc npar1way data=covid_positive_labtest;
+		class racecat;
+		var fibrhigh_day1 ;
+		run;
+
+	proc univariate data=covid_positive_labtest normal plot;
+	 by racecat;
+	 var il6high_day1 ;
+	run;
+	
+		proc npar1way data=covid_positive_labtest;
+		class racecat;
+		var il6high_day1 ;
+		run;
+
+
+/*-----------------------------------------------------------------
+					Lab Unit Analysis
+-------------------------------------------------------------------*/
+	proc freq data=covid_positive;
+		tables racecat * (biliunit_853378 tropmeas_853378 bnpunit_853378 ferrunit_853378 crpunit_853378 procunit_853378 il6unit_853378) / missing;
+	run;
+
